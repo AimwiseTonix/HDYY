@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HDYY — 后台管理</title>
+<link rel="stylesheet" href="style.css">
+<style>
+/* -- Admin extras -- */
+.scene-grid { display: flex; flex-direction: column; gap: 16px; }
+.scene-card { border: 1px solid var(--border); background: var(--surface); }
+.scene-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 20px; cursor: pointer; user-select: none;
+}
+.scene-header:hover { background: rgba(255,255,255,0.02); }
+.scene-header .name { font-size: 14px; letter-spacing: 1px; }
+.scene-header .badge {
+  font-size: 10px; padding: 3px 10px; letter-spacing: 2px; border: 1px solid var(--border);
+}
+.badge.ending { color: #666; }
+.badge.branch { color: var(--accent-dim); border-color: var(--accent-dim); }
+.badge.start { color: #fff; border-color: #fff; }
+
+.scene-body { padding: 0 20px 20px; display: none; }
+.scene-card.open .scene-body { display: block; }
+.scene-card.open .scene-header { border-bottom: 1px solid var(--border); }
+
+.choice-block {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px;
+}
+.choice-col {
+  border: 1px solid var(--border); padding: 14px;
+}
+.choice-col h4 { font-size: 12px; letter-spacing: 3px; color: var(--accent-dim); margin-bottom: 10px; font-weight: 300; }
+
+.flow-arrow {
+  text-align: center; padding: 8px 0; color: #333; font-size: 18px; letter-spacing: 2px;
+}
+.video-preview {
+  margin-top: 10px;
+}
+.video-preview video {
+  width: 100%; max-height: 150px; background: #000; border: 1px solid var(--border);
+}
+
+.empty-hint {
+  text-align: center; padding: 30px; color: #444; font-size: 13px; letter-spacing: 2px;
+}
+</style>
+</head>
+<body>
+
+<div class="admin-container">
+
+  <div class="admin-header">
+    <h1>后 台 管 理</h1>
+    <div style="display:flex;gap:12px;">
+      <a href="/">前台首页</a>
+      <a href="/game.html">游戏页面</a>
+    </div>
+  </div>
+
+  <!-- ① Upload Videos -->
+  <div class="admin-section">
+    <h2>▸ 第一步：上传视频素材</h2>
+    <div class="upload-area" id="uploadArea">
+      <p>点击或拖拽视频文件到此处上传（支持 MP4）</p>
+      <input type="file" id="fileInput" accept="video/*">
+    </div>
+    <div class="upload-status" id="uploadStatus"></div>
+    <div class="video-list" id="videoList"></div>
+  </div>
+
+  <!-- ② Story Flow -->
+  <div class="admin-section">
+    <h2>▸ 第二步：配置剧情分支</h2>
+    <p style="font-size:12px;color:#555;margin-bottom:18px;letter-spacing:1px;">
+      选择一个起始视频，然后为每个需要分支的视频配置 A / B 两个选项及各自跳转的目标视频。没有选项的视频将作为结局自动结束。
+    </p>
+
+    <div class="form-group">
+      <label>起始视频（玩家将首先观看此视频）</label>
+      <select id="startVideoSelect">
+        <option value="">-- 请先上传视频 --</option>
+      </select>
+    </div>
+
+    <div id="scenesContainer" style="margin-top:20px;">
+      <div class="empty-hint" id="emptyHint">暂无视频，请先上传</div>
+    </div>
+
+    <div class="btn-row" style="margin-top:20px;">
+      <button class="btn-sm" onclick="saveStory()">保存剧情配置</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---- State ----
+let videos = [];
+let story = { startVideo: null, nodes: {} };
+
+// ---- Init ----
+async function init() {
+  await Promise.all([loadVideos(), loadStory()]);
+  ensureNodesForVideos();
+  renderAll();
+}
+
+async function loadVideos() {
+  const res = await fetch('/api/admin/videos');
+  videos = await res.json();
+}
+
+async function loadStory() {
+  const res = await fetch('/api/admin/story');
+  story = await res.json();
+  if (!story.nodes) story.nodes = {};
+}
+
+// Auto-create node entries for any video not yet in nodes
+function ensureNodesForVideos() {
+  for (const v of videos) {
+    if (!story.nodes[v.filename]) {
+      story.nodes[v.filename] = {
+        video: v.filename,
+        choices: [{ label: '', nextVideo: '' }, { label: '', nextVideo: '' }]
+      };
+    }
+  }
+}
+
+// ---- Upload ----
+const uploadArea = document.getElementById('uploadArea');
+const fileInput = document.getElementById('fileInput');
+const uploadStatus = document.getElementById('uploadStatus');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.style.borderColor = '#888'; });
+uploadArea.addEventListener('dragleave', () => { uploadArea.style.borderColor = ''; });
+uploadArea.addEventListener('drop', e => {
+  e.preventDefault(); uploadArea.style.borderColor = '';
+  if (e.dataTransfer.files.length > 0) uploadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length > 0) uploadFile(fileInput.files[0]);
+});
+
+async function uploadFile(file) {
+  uploadStatus.textContent = '上传中...';
+  const fd = new FormData(); fd.append('video', file);
+  try {
+    const res = await fetch('/api/admin/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.filename) {
+      uploadStatus.textContent = '上传成功: ' + data.originalName;
+      await loadVideos();
+      ensureNodesForVideos();
+      renderAll();
+    }
+  } catch (e) {
+    uploadStatus.textContent = '上传失败';
+  }
+}
+
+// ---- Delete ----
+async function deleteVideo(filename) {
+  if (!confirm('确定删除 ' + filename + ' ？相关剧情配置也会被清除。')) return;
+  await fetch('/api/admin/videos/' + encodeURIComponent(filename), { method: 'DELETE' });
+  await Promise.all([loadVideos(), loadStory()]);
+  renderAll();
+}
+
+// ---- Render ----
+function renderAll() {
+  renderVideoList();
+  renderStartVideoSelect();
+  renderScenes();
+}
+
+function renderVideoList() {
+  const el = document.getElementById('videoList');
+  if (videos.length === 0) {
+    el.innerHTML = '<p style="color:#555;font-size:12px;padding:10px;">暂无视频，请先上传</p>';
+    return;
+  }
+  el.innerHTML = videos.map(v => `
+    <div class="video-item">
+      <span class="name" title="${esc(v.filename)}">${esc(v.filename)}</span>
+      <button class="btn-del" onclick="deleteVideo('${esc(v.filename)}')">删除</button>
+    </div>
+  `).join('');
+}
+
+function renderStartVideoSelect() {
+  const sel = document.getElementById('startVideoSelect');
+  const opts = videos.map(v =>
+    `<option value="${esc(v.filename)}" ${story.startVideo === v.filename ? 'selected' : ''}>${esc(v.filename)}</option>`
+  ).join('');
+  sel.innerHTML = videos.length === 0
+    ? '<option value="">-- 请先上传视频 --</option>'
+    : '<option value="">-- 选择起始视频 --</option>' + opts;
+}
+
+function renderScenes() {
+  const container = document.getElementById('scenesContainer');
+  const hint = document.getElementById('emptyHint');
+
+  if (videos.length === 0) {
+    container.innerHTML = '';
+    const el = document.createElement('div');
+    el.className = 'empty-hint';
+    el.textContent = '暂无视频，请先上传';
+    container.appendChild(el);
+    return;
+  }
+
+  container.innerHTML = videos.map(v => renderSceneCard(v.filename)).join('');
+}
+
+function renderSceneCard(filename) {
+  const node = story.nodes[filename];
+  const choices = node ? (node.choices || []) : [];
+  const hasBranch = choices.some(c => c.label || c.nextVideo);
+  const isStart = story.startVideo === filename;
+
+  const videoOpts = videos.map(v =>
+    `<option value="${esc(v.filename)}" ${v.filename !== filename ? '' : ''}>${esc(v.filename)}</option>`
+  ).join('');
+
+  const badgeHtml = isStart
+    ? '<span class="badge start">起始</span>'
+    : hasBranch
+      ? '<span class="badge branch">分支</span>'
+      : '<span class="badge ending">结局</span>';
+
+  return `
+    <div class="scene-card ${hasBranch || isStart ? 'open' : ''}">
+      <div class="scene-header" onclick="this.parentElement.classList.toggle('open')">
+        <span class="name">${esc(filename)}</span>
+        ${badgeHtml}
+      </div>
+      <div class="scene-body">
+        <!-- Choice A -->
+        <div class="choice-block">
+          <div class="choice-col">
+            <h4>选项 A</h4>
+            <div class="form-group">
+              <label>按钮文字</label>
+              <input placeholder="例如：进入城市"
+                value="${esc(choices[0]?.label || '')}"
+                onchange="updateChoice('${esc(filename)}', 0, 'label', this.value)">
+            </div>
+            <div class="form-group">
+              <label>跳转到视频</label>
+              <select onchange="updateChoice('${esc(filename)}', 0, 'nextVideo', this.value)">
+                <option value="">-- 不跳转（结局） --</option>
+                ${videos.map(v => `<option value="${esc(v.filename)}" ${choices[0]?.nextVideo === v.filename ? 'selected' : ''}>${esc(v.filename)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="choice-col">
+            <h4>选项 B</h4>
+            <div class="form-group">
+              <label>按钮文字</label>
+              <input placeholder="例如：留在荒野"
+                value="${esc(choices[1]?.label || '')}"
+                onchange="updateChoice('${esc(filename)}', 1, 'label', this.value)">
+            </div>
+            <div class="form-group">
+              <label>跳转到视频</label>
+              <select onchange="updateChoice('${esc(filename)}', 1, 'nextVideo', this.value)">
+                <option value="">-- 不跳转（结局） --</option>
+                ${videos.map(v => `<option value="${esc(v.filename)}" ${choices[1]?.nextVideo === v.filename ? 'selected' : ''}>${esc(v.filename)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ---- Story mutation ----
+function updateChoice(nodeKey, index, field, value) {
+  const node = story.nodes[nodeKey];
+  if (!node) return;
+  if (!node.choices) node.choices = [];
+  if (!node.choices[index]) node.choices[index] = { label: '', nextVideo: '' };
+  node.choices[index][field] = value;
+}
+
+// ---- Save ----
+async function saveStory() {
+  story.startVideo = document.getElementById('startVideoSelect').value || null;
+
+  // Save only nodes that have at least one choice configured
+  const cleanedNodes = {};
+  for (const [key, node] of Object.entries(story.nodes)) {
+    const choices = (node.choices || []).filter(c => c.label || c.nextVideo);
+    if (choices.length > 0) {
+      cleanedNodes[key] = { video: node.video, choices };
+    }
+  }
+  const payload = { startVideo: story.startVideo, nodes: cleanedNodes };
+
+  const res = await fetch('/api/admin/story', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (data.success) {
+    showToast('剧情配置已保存', 'success');
+    story = payload;
+    renderAll();
+  } else {
+    showToast('保存失败', 'error');
+  }
+}
+
+// ---- Helpers ----
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function showToast(msg, type) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+init();
+</script>
+</body>
+</html>

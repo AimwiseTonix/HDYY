@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HDYY — 游戏中</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="game-container" id="gameContainer">
+  <video id="gameVideo" preload="auto" playsinline></video>
+
+  <div id="choiceOverlay" class="choice-overlay">
+    <div class="choice-prompt">做出你的选择</div>
+    <div class="choice-buttons">
+      <button id="btnA" class="btn-choice">A</button>
+      <button id="btnB" class="btn-choice">B</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- State ----
+let storyData = null;
+let currentNode = null;
+let blobUrl = null;
+let ws = null;
+let chunks = [];
+let resolveVideo = null; // promise resolver for current video load
+let expectedSize = 0;
+let loadedSize = 0;
+
+const video = document.getElementById('gameVideo');
+const overlay = document.getElementById('choiceOverlay');
+const btnA = document.getElementById('btnA');
+const btnB = document.getElementById('btnB');
+const container = document.getElementById('gameContainer');
+
+// ---- WebSocket ----
+function connectWS() {
+  return new Promise((resolve, reject) => {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${protocol}//${location.host}`;
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => resolve();
+
+    ws.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'start') {
+          expectedSize = msg.size;
+          loadedSize = 0;
+          showStatus('加载中 0%');
+        } else if (msg.type === 'done') {
+          hideStatus();
+          const blob = new Blob(chunks, { type: 'video/mp4' });
+          chunks = [];
+          expectedSize = 0;
+          loadedSize = 0;
+          if (resolveVideo) {
+            resolveVideo(blob);
+            resolveVideo = null;
+          }
+        } else if (msg.type === 'error') {
+          chunks = [];
+          expectedSize = 0;
+          loadedSize = 0;
+          hideStatus();
+          if (resolveVideo) {
+            resolveVideo(null);
+            resolveVideo = null;
+          }
+          showToast('视频加载失败: ' + msg.message, 'error');
+        }
+      } else {
+        chunks.push(event.data);
+        loadedSize += event.data.byteLength;
+        if (expectedSize > 0) {
+          const pct = Math.round((loadedSize / expectedSize) * 100);
+          showStatus('加载中 ' + pct + '%');
+        }
+      }
+    };
+
+    ws.onerror = () => {};
+    ws.onclose = () => {};
+  });
+}
+
+function requestVideo(filename) {
+  if (!ws || ws.readyState !== 1) return Promise.reject(new Error('WebSocket not connected'));
+  return new Promise((resolve) => {
+    resolveVideo = resolve;
+    chunks = [];
+    ws.send(JSON.stringify({ type: 'play', filename }));
+  });
+}
+
+// ---- Load story ----
+async function loadStory() {
+  const res = await fetch('/api/story');
+  storyData = await res.json();
+}
+
+function getNode(videoName) {
+  return storyData.nodes[videoName] || null;
+}
+
+// ---- Play video ----
+async function playVideo(videoName) {
+  hideChoices();
+
+  // Clean up previous blob URL
+  if (blobUrl) {
+    URL.revokeObjectURL(blobUrl);
+    blobUrl = null;
+  }
+
+  // Clear all previous event handlers
+  video.onloadedmetadata = null;
+  video.ontimeupdate = null;
+  video.onended = null;
+
+  currentNode = getNode(videoName);
+  video.pause();
+
+  showStatus('加载中...');
+
+  try {
+    const blob = await requestVideo(videoName);
+    if (!blob) {
+      hideStatus();
+      return;
+    }
+
+    // Set event handlers BEFORE load/play, because for blob URLs
+    // loadedmetadata can fire before the handler is assigned
+    if (!currentNode || !currentNode.choices || currentNode.choices.length === 0) {
+      video.onended = () => showToast('故事结束', 'success');
+    } else {
+      video.onloadedmetadata = () => {
+        const duration = video.duration;
+        if (duration && isFinite(duration)) {
+          const triggerTime = Math.max(duration - 2, 0);
+          video.ontimeupdate = () => {
+            if (video.currentTime >= triggerTime && !overlay.classList.contains('active')) {
+              showChoices(currentNode);
+            }
+          };
+        }
+      };
+      video.onended = () => {
+        if (!overlay.classList.contains('active')) showChoices(currentNode);
+      };
+    }
+
+    blobUrl = URL.createObjectURL(blob);
+    video.src = blobUrl;
+    video.load();
+    await video.play();
+    hideStatus();
+  } catch (e) {
+    hideStatus();
+    showToast('视频加载失败', 'error');
+  }
+}
+
+// ---- Choices ----
+function showChoices(node) {
+  video.pause();
+  const choices = node.choices || [];
+  if (choices.length === 0) return;
+
+  btnA.textContent = choices[0]?.label || 'A';
+  if (choices[1]) {
+    btnB.style.display = '';
+    btnB.textContent = choices[1].label || 'B';
+    btnB.onclick = () => selectChoice(choices[1]);
+  } else {
+    btnB.style.display = 'none';
+  }
+  btnA.onclick = () => selectChoice(choices[0]);
+
+  overlay.classList.add('active');
+}
+
+function selectChoice(choice) {
+  if (!choice || !choice.nextVideo) return;
+  hideChoices();
+  playVideo(choice.nextVideo);
+}
+
+function hideChoices() {
+  overlay.classList.remove('active');
+}
+
+// ---- Status ----
+function showStatus(msg) {
+  let el = document.getElementById('loadStatus');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loadStatus';
+    el.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#888;font-size:16px;letter-spacing:4px;z-index:5;pointer-events:none;';
+    container.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = '';
+}
+
+function hideStatus() {
+  const el = document.getElementById('loadStatus');
+  if (el) el.style.display = 'none';
+}
+
+// ---- Title screen ----
+function showTitleScreen(callback) {
+  const title = document.createElement('div');
+  title.id = 'titleScreen';
+  title.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;z-index:50;cursor:pointer;gap:30px;';
+  title.innerHTML = `
+    <div style="font-size:48px;letter-spacing:16px;color:#fff;">HDYY</div>
+    <div style="color:#666;letter-spacing:4px;font-size:13px;">点击开始</div>
+  `;
+  title.addEventListener('click', () => { title.remove(); callback(); });
+  document.body.appendChild(title);
+}
+
+// ---- Toast ----
+function showToast(msg, type) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+// ---- Init ----
+(async function init() {
+  await loadStory();
+
+  if (!storyData.startVideo) {
+    document.body.innerHTML = `
+      <div class="landing">
+        <div class="choice-prompt">尚未配置起始视频</div>
+        <p style="color:#666;margin-top:10px;letter-spacing:2px;font-size:13px;">
+          请先前往 <a href="/admin.html" style="color:#aaa;">后台管理</a> 上传视频并配置剧情
+        </p>
+      </div>`;
+    return;
+  }
+
+  // Connect WebSocket
+  showStatus('连接中...');
+  try {
+    await connectWS();
+    hideStatus();
+  } catch (e) {
+    hideStatus();
+    showToast('连接失败，请刷新重试', 'error');
+    return;
+  }
+
+  showTitleScreen(() => playVideo(storyData.startVideo));
+})();
+
+// ---- Cleanup ----
+window.addEventListener('beforeunload', () => {
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+  if (ws) ws.close();
+});
+</script>
+</body>
+</html>

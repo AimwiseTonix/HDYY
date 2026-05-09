@@ -1,0 +1,20 @@
+{
+  "name": "hdyy-interactive-film",
+  "version": "1.0.0",
+  "description": "Interactive film game with black & white tech style",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "serve": "pm2 start ecosystem.config.js",
+    "stop": "pm2 stop hdyy",
+    "restart": "pm2 restart hdyy",
+    "logs": "pm2 logs hdyy"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "ws": "^8.20.0"
+  }
+}
