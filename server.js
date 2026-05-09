@@ -44,8 +44,32 @@ const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(PUBLIC_DIR));
 app.use('/uploads', express.static(UPLOADS_DIR));
+
+// ---------- Admin Auth ----------
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'hdyy2026';
+
+function adminAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="HDYY Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  const [user, pass] = Buffer.from(auth.slice(6), 'base64').toString().split(':');
+  if (user !== ADMIN_USER || pass !== ADMIN_PASS) {
+    res.set('WWW-Authenticate', 'Basic realm="HDYY Admin"');
+    return res.status(401).send('Unauthorized');
+  }
+  next();
+}
+
+// Protect admin routes
+app.all('/admin.html', adminAuth);
+app.all('/api/admin/*', adminAuth);
+
+// Static files (after auth middleware for admin)
+app.use(express.static(PUBLIC_DIR));
 
 // ---------- Admin APIs ----------
 
