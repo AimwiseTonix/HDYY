@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const http = require('http');
+const { exec } = require('child_process');
 const { WebSocketServer } = require('ws');
 
 const app = express();
@@ -118,6 +119,33 @@ app.put('/api/admin/story', (req, res) => {
 // ---------- Game API ----------
 
 app.get('/api/story', (req, res) => res.json(loadStory()));
+
+// ---------- Deploy Webhook ----------
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'hdyy_deploy_2026';
+const PROJECT_DIR = __dirname;
+
+app.post('/api/deploy', (req, res) => {
+  const token = req.headers['x-webhook-token'] || req.query.token;
+  if (token !== WEBHOOK_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const steps = [
+    'git fetch origin master',
+    'git reset --hard origin/master',
+    'npm install --production',
+    'pm2 restart hdyy',
+  ];
+  const cmd = steps.join(' && ');
+
+  exec(cmd, { cwd: PROJECT_DIR, timeout: 120000 }, (err, stdout, stderr) => {
+    res.json({
+      success: !err,
+      output: stdout.trim(),
+      error: stderr ? stderr.trim() : null,
+    });
+  });
+});
 
 // ---------- HTTP server + WebSocket ----------
 
