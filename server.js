@@ -155,6 +155,12 @@ app.put('/api/admin/story', (req, res) => {
 
 app.get('/api/story', (req, res) => res.json(loadStory()));
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    cdnBase: process.env.CDN_BASE || '',
+  });
+});
+
 // ---------- Deploy Webhook ----------
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'hdyy_deploy_2026';
 

@@ -78,7 +78,9 @@ function playVideo(videoName) {
   video.oncanplay = () => hideStatus();
 
   showStatus('缓冲中...');
-  video.src = '/api/video/' + encodeURIComponent(videoName);
+  // Use CDN for video if available, fallback to direct
+  var cdn = (window.CDN_BASE || '');
+  video.src = cdn + '/api/video/' + encodeURIComponent(videoName);
   video.load();
   video.play().catch(() => {});
 }
@@ -154,6 +156,13 @@ function showToast(msg, type) {
 
 // ---- Init ----
 (async function init() {
+  // Load CDN config first
+  try {
+    const cfgRes = await fetch('/api/config');
+    const cfg = await cfgRes.json();
+    if (cfg.cdnBase) window.CDN_BASE = cfg.cdnBase;
+  } catch (e) {}
+
   await loadStory();
 
   if (!storyData.startVideo) {
