@@ -11,6 +11,9 @@
 <div class="game-container" id="gameContainer">
   <video id="gameVideo" preload="auto" playsinline></video>
 
+  <!-- Hidden pool for preloading next videos -->
+  <div id="preloadPool" style="display:none;" aria-hidden="true"></div>
+
   <div id="choiceOverlay" class="choice-overlay">
     <div class="choice-prompt">做出你的选择</div>
     <div class="choice-buttons">
@@ -83,6 +86,50 @@ function playVideo(videoName) {
   video.src = cdn + '/api/video/' + encodeURIComponent(videoName);
   video.load();
   video.play().catch(() => {});
+
+  // Preload next possible videos in background
+  if (currentNode && currentNode.choices) {
+    preloadNextVideos(currentNode.choices);
+  }
+}
+
+// ---- Preload pool ----
+var preloadPool = {}; // videoName -> HTMLVideoElement
+
+function preloadNextVideos(choices) {
+  var cdn = window.CDN_BASE || '';
+  var pool = document.getElementById('preloadPool');
+
+  // Track which videos we still need
+  var keep = {};
+  for (var i = 0; i < choices.length; i++) {
+    var name = choices[i].nextVideo;
+    if (!name) continue;
+    keep[name] = true;
+  }
+
+  // Remove videos no longer needed
+  for (var key in preloadPool) {
+    if (!keep[key]) {
+      preloadPool[key].src = '';
+      if (preloadPool[key].parentNode) preloadPool[key].parentNode.removeChild(preloadPool[key]);
+      delete preloadPool[key];
+    }
+  }
+
+  // Add new videos to preload
+  for (i = 0; i < choices.length; i++) {
+    name = choices[i].nextVideo;
+    if (!name || preloadPool[name]) continue;
+    var v = document.createElement('video');
+    v.preload = 'auto';
+    v.muted = true;
+    v.playsinline = true;
+    v.src = cdn + '/api/video/' + encodeURIComponent(name);
+    v.load();
+    preloadPool[name] = v;
+    pool.appendChild(v);
+  }
 }
 
 // ---- Choices ----
@@ -178,6 +225,14 @@ function showToast(msg, type) {
 
   showTitleScreen(() => playVideo(storyData.startVideo));
 })();
+
+// Clean up preloaded videos on page leave
+window.addEventListener('beforeunload', function() {
+  for (var key in preloadPool) {
+    preloadPool[key].src = '';
+    delete preloadPool[key];
+  }
+});
 </script>
 </body>
 </html>
