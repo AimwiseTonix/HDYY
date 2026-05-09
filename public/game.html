@@ -21,6 +21,13 @@
       <button id="btnB" class="btn-choice">B</button>
     </div>
   </div>
+
+  <div id="endOverlay" class="choice-overlay">
+    <div class="choice-prompt">剧情未完，请等待后续</div>
+    <div class="choice-buttons">
+      <button class="btn-choice" onclick="location.href='/'">返回主页</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -58,7 +65,7 @@ function playVideo(videoName) {
 
   // Set event handlers BEFORE setting src
   if (!currentNode || !currentNode.choices || currentNode.choices.length === 0) {
-    video.onended = () => showToast('故事结束', 'success');
+    video.onended = () => { document.getElementById('endOverlay').classList.add('active'); };
   } else {
     video.onloadedmetadata = () => {
       const duration = video.duration;
@@ -159,6 +166,7 @@ function selectChoice(choice) {
 
 function hideChoices() {
   overlay.classList.remove('active');
+  document.getElementById('endOverlay').classList.remove('active');
 }
 
 // ---- Status ----
