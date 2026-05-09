@@ -3,14 +3,11 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
-const http = require('http');
 const { exec } = require('child_process');
-const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Ensure directories exist
 const DATA_DIR = path.join(__dirname, 'data');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -33,7 +30,6 @@ function saveStory(data) {
   fs.writeFileSync(STORY_FILE, JSON.stringify(data, null, 2));
 }
 
-// Multer config
 const storage = multer.diskStorage({
   destination: UPLOADS_DIR,
   filename: (req, file, cb) => {
@@ -45,7 +41,6 @@ const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024 } });
 
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ---------- Admin Auth ----------
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -65,12 +60,52 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// Protect admin routes
 app.all('/admin.html', adminAuth);
 app.all('/api/admin/*', adminAuth);
-
-// Static files (after auth middleware for admin)
 app.use(express.static(PUBLIC_DIR));
+
+// ---------- Video Streaming (HTTP Range) ----------
+app.get('/api/video/:filename', (req, res) => {
+  const filePath = path.join(UPLOADS_DIR, req.params.filename);
+  if (!fs.existsSync(filePath)) return res.status(404).end();
+
+  // Simple hotlink protection: allow requests from own site or direct (Referer may be absent for video)
+  const referer = req.headers.referer || '';
+  const host = req.headers.host || '';
+  if (referer && !referer.includes(host)) {
+    return res.status(403).end();
+  }
+
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunkSize = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': 'video/mp4',
+      'Content-Disposition': 'inline',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4',
+      'Content-Disposition': 'inline',
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
 
 // ---------- Admin APIs ----------
 
@@ -122,67 +157,25 @@ app.get('/api/story', (req, res) => res.json(loadStory()));
 
 // ---------- Deploy Webhook ----------
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'hdyy_deploy_2026';
-const PROJECT_DIR = __dirname;
 
 app.post('/api/deploy', (req, res) => {
   const token = req.headers['x-webhook-token'] || req.query.token;
-  if (token !== WEBHOOK_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
+  if (token !== WEBHOOK_SECRET) return res.status(403).json({ error: 'Forbidden' });
 
-  const steps = [
+  const cmd = [
     'git fetch origin master',
     'git reset --hard origin/master',
     'npm install --production',
     'pm2 restart hdyy',
-  ];
-  const cmd = steps.join(' && ');
+  ].join(' && ');
 
-  exec(cmd, { cwd: PROJECT_DIR, timeout: 120000 }, (err, stdout, stderr) => {
-    res.json({
-      success: !err,
-      output: stdout.trim(),
-      error: stderr ? stderr.trim() : null,
-    });
+  exec(cmd, { cwd: __dirname, timeout: 120000 }, (err, stdout, stderr) => {
+    res.json({ success: !err, output: stdout.trim(), error: stderr ? stderr.trim() : null });
   });
 });
 
-// ---------- HTTP server + WebSocket ----------
+// ---------- Start ----------
 
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws) => {
-  ws.on('message', (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
-
-    if (msg.type === 'play' && msg.filename) {
-      const filePath = path.join(UPLOADS_DIR, msg.filename);
-      if (!fs.existsSync(filePath)) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Video not found' }));
-        return;
-      }
-
-      const fileSize = fs.statSync(filePath).size;
-      ws.send(JSON.stringify({ type: 'start', size: fileSize }));
-      const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
-
-      stream.on('data', (chunk) => {
-        if (ws.readyState === 1) ws.send(chunk);
-      });
-
-      stream.on('end', () => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'done' }));
-      });
-
-      stream.on('error', () => {
-        if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'error', message: 'Read error' }));
-      });
-    }
-  });
-});
-
-server.listen(PORT, () => {
-  console.log(`HDYY Interactive Film running at http://localhost:${PORT}`);
+app.listen(PORT, () => {
+  console.log(`HDYY running at http://localhost:${PORT}`);
 });

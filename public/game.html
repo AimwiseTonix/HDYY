@@ -21,83 +21,14 @@
 </div>
 
 <script>
-// ---- State ----
 let storyData = null;
 let currentNode = null;
-let blobUrl = null;
-let ws = null;
-let chunks = [];
-let resolveVideo = null; // promise resolver for current video load
-let expectedSize = 0;
-let loadedSize = 0;
 
 const video = document.getElementById('gameVideo');
 const overlay = document.getElementById('choiceOverlay');
 const btnA = document.getElementById('btnA');
 const btnB = document.getElementById('btnB');
 const container = document.getElementById('gameContainer');
-
-// ---- WebSocket ----
-function connectWS() {
-  return new Promise((resolve, reject) => {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${location.host}`;
-    ws = new WebSocket(url);
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = () => resolve();
-
-    ws.onmessage = (event) => {
-      if (typeof event.data === 'string') {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'start') {
-          expectedSize = msg.size;
-          loadedSize = 0;
-          showStatus('加载中 0%');
-        } else if (msg.type === 'done') {
-          hideStatus();
-          const blob = new Blob(chunks, { type: 'video/mp4' });
-          chunks = [];
-          expectedSize = 0;
-          loadedSize = 0;
-          if (resolveVideo) {
-            resolveVideo(blob);
-            resolveVideo = null;
-          }
-        } else if (msg.type === 'error') {
-          chunks = [];
-          expectedSize = 0;
-          loadedSize = 0;
-          hideStatus();
-          if (resolveVideo) {
-            resolveVideo(null);
-            resolveVideo = null;
-          }
-          showToast('视频加载失败: ' + msg.message, 'error');
-        }
-      } else {
-        chunks.push(event.data);
-        loadedSize += event.data.byteLength;
-        if (expectedSize > 0) {
-          const pct = Math.round((loadedSize / expectedSize) * 100);
-          showStatus('加载中 ' + pct + '%');
-        }
-      }
-    };
-
-    ws.onerror = () => {};
-    ws.onclose = () => {};
-  });
-}
-
-function requestVideo(filename) {
-  if (!ws || ws.readyState !== 1) return Promise.reject(new Error('WebSocket not connected'));
-  return new Promise((resolve) => {
-    resolveVideo = resolve;
-    chunks = [];
-    ws.send(JSON.stringify({ type: 'play', filename }));
-  });
-}
 
 // ---- Load story ----
 async function loadStory() {
@@ -109,63 +40,47 @@ function getNode(videoName) {
   return storyData.nodes[videoName] || null;
 }
 
-// ---- Play video ----
-async function playVideo(videoName) {
+// ---- Play video (direct HTTP streaming) ----
+function playVideo(videoName) {
   hideChoices();
 
-  // Clean up previous blob URL
-  if (blobUrl) {
-    URL.revokeObjectURL(blobUrl);
-    blobUrl = null;
-  }
-
-  // Clear all previous event handlers
+  // Clear handlers
   video.onloadedmetadata = null;
   video.ontimeupdate = null;
   video.onended = null;
+  video.onwaiting = null;
+  video.oncanplay = null;
 
   currentNode = getNode(videoName);
-  video.pause();
 
-  showStatus('加载中...');
-
-  try {
-    const blob = await requestVideo(videoName);
-    if (!blob) {
-      hideStatus();
-      return;
-    }
-
-    // Set event handlers BEFORE load/play, because for blob URLs
-    // loadedmetadata can fire before the handler is assigned
-    if (!currentNode || !currentNode.choices || currentNode.choices.length === 0) {
-      video.onended = () => showToast('故事结束', 'success');
-    } else {
-      video.onloadedmetadata = () => {
-        const duration = video.duration;
-        if (duration && isFinite(duration)) {
-          const triggerTime = Math.max(duration - 2, 0);
-          video.ontimeupdate = () => {
-            if (video.currentTime >= triggerTime && !overlay.classList.contains('active')) {
-              showChoices(currentNode);
-            }
-          };
-        }
-      };
-      video.onended = () => {
-        if (!overlay.classList.contains('active')) showChoices(currentNode);
-      };
-    }
-
-    blobUrl = URL.createObjectURL(blob);
-    video.src = blobUrl;
-    video.load();
-    await video.play();
-    hideStatus();
-  } catch (e) {
-    hideStatus();
-    showToast('视频加载失败', 'error');
+  // Set event handlers BEFORE setting src
+  if (!currentNode || !currentNode.choices || currentNode.choices.length === 0) {
+    video.onended = () => showToast('故事结束', 'success');
+  } else {
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      if (duration && isFinite(duration)) {
+        const triggerTime = Math.max(duration - 2, 0);
+        video.ontimeupdate = () => {
+          if (video.currentTime >= triggerTime && !overlay.classList.contains('active')) {
+            showChoices(currentNode);
+          }
+        };
+      }
+    };
+    video.onended = () => {
+      if (!overlay.classList.contains('active')) showChoices(currentNode);
+    };
   }
+
+  // Buffering indicator
+  video.onwaiting = () => showStatus('缓冲中...');
+  video.oncanplay = () => hideStatus();
+
+  showStatus('缓冲中...');
+  video.src = '/api/video/' + encodeURIComponent(videoName);
+  video.load();
+  video.play().catch(() => {});
 }
 
 // ---- Choices ----
@@ -252,25 +167,8 @@ function showToast(msg, type) {
     return;
   }
 
-  // Connect WebSocket
-  showStatus('连接中...');
-  try {
-    await connectWS();
-    hideStatus();
-  } catch (e) {
-    hideStatus();
-    showToast('连接失败，请刷新重试', 'error');
-    return;
-  }
-
   showTitleScreen(() => playVideo(storyData.startVideo));
 })();
-
-// ---- Cleanup ----
-window.addEventListener('beforeunload', () => {
-  if (blobUrl) URL.revokeObjectURL(blobUrl);
-  if (ws) ws.close();
-});
 </script>
 </body>
 </html>
